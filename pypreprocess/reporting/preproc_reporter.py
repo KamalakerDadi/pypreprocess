@@ -525,6 +525,7 @@ def generate_normalization_thumbnails(
         gallery to which thumbnails will be committed
 
     """
+    _set_templates()
     if isinstance(normalized_files, _basestring):
         normalized = normalized_files
     else:
