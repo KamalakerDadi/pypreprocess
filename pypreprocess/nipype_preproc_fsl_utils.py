@@ -344,6 +344,7 @@ def _do_subject_normalize(subject_data, caching, cmd_prefix,
     if not fsl.ApplyWarp._cmd.startswith("fsl"):
         fsl.ApplyWarp._cmd = cmd_prefix + fsl.ApplyWarp._cmd
 
+    # Simple dot product between func2structmat and struct2MNImat
     func2structmat = subject_data.nipype_results['coreg'].outputs.out_matrix_file
     affine_file = norm_results.outputs.out_matrix_file
     premat = np.dot(np.loadtxt(func2structmat), np.loadtxt(affine_file))
