@@ -506,7 +506,7 @@ class SubjectData(object):
         for item in ['func', 'realignment_parameters']:
             tmp = []
             if hasattr(self, item):
-                filenames = getattr(self, item)
+                filenames = getattr(self, item, self.n_sessions)
                 if isinstance(filenames, _basestring):
                     assert self.n_sessions == 1, filenames
                     filenames = [filenames]
