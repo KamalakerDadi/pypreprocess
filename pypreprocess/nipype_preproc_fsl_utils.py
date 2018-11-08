@@ -93,7 +93,11 @@ def _do_subject_extract_roi(subject_data, caching, cmd_prefix,
         fsl.ExtractROI._cmd = cmd_prefix + fsl.ExtractROI._cmd
 
     extract_roi_results = extract(**_update_interface_inputs(
-        in_file=subject_data.func[0], t_min=t_min, t_size=-1,
+        in_file=(subject_data.func[0] 
+                 if isinstance(subject_data.func, list)
+                 else subject_data.func),
+        t_min=t_min,
+        t_size=-1,
         interface_kwargs=kwargs))
 
     # failed node
@@ -344,15 +348,13 @@ def _do_subject_normalize(subject_data, caching, cmd_prefix,
     if not fsl.ApplyWarp._cmd.startswith("fsl"):
         fsl.ApplyWarp._cmd = cmd_prefix + fsl.ApplyWarp._cmd
 
-    # Simple dot product between func2structmat and struct2MNImat
+    # Apply final transform
     func2structmat = subject_data.nipype_results['coreg'].outputs.out_matrix_file
-    affine_file = norm_results.outputs.out_matrix_file
-    premat = np.dot(np.loadtxt(func2structmat), np.loadtxt(affine_file))
-    np.savetxt('this_affine.mat', premat)
     applywarp_results = applywarp(**_update_interface_inputs(
-        ref_file=FSL_WARP_TEMPLATE, in_file=subject_data.func[0],
-        field_file=fnirt_results.outputs.fieldcoeff_file,
-        premat='this_affine.mat', interface_kwargs=kwargs))
+        ref_file=FSL_WARP_TEMPLATE,
+        in_file=subject_data.nipype_results['coreg'].inputs["in_file"],
+        field_file=fnirt_results.outputs.field_file,
+        premat=func2structmat, interface_kwargs=kwargs))
     subject_data.nipype_results['applywarp'] = applywarp_results
     subject_data.func = applywarp_results.outputs.out_file
 
@@ -412,6 +414,11 @@ def do_subject_preproc(subject_data,
                                  preproc_undergone=preproc_undergone,
                                  tsdiffana=tsdiffana)
 
+    else:
+        subject_data._set_session_ids()
+        subject_data._sanitize_output_dirs()
+        subject_data._sanitize_scratch_dirs()
+
     if caching:
         # prepare for smart-caching
         cache_dir = os.path.join(subject_data.scratch, 'cache_dir')
@@ -421,7 +428,8 @@ def do_subject_preproc(subject_data,
         joblib_mem = JoblibMemory(cache_dir, verbose=100)
 
     # sanitize input files
-    if not isinstance(subject_data.func[0], _basestring):
+    if (isinstance(subject_data.func, list) and
+            not isinstance(subject_data.func[0], _basestring)):
         subject_data.func = joblib_mem.cache(do_fsl_merge)(
             subject_data.func, subject_data.output_dir, output_prefix='Merged',
             cmd_prefix=cmd_prefix)
