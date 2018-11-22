@@ -109,7 +109,7 @@ def plot_registration(reference_img, coregistered_img,
 
     # XXX nilearn complains about rotations in affine, etc.
     reference_img = reorder_img(reference_img, resample="continuous")
-    
+
     _slicer.add_edges(reference_img)
     # misc
     _slicer.title(title, size=12, color='w', alpha=0)

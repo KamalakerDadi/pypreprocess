@@ -14,7 +14,7 @@ from nipype.interfaces.fsl import ExtractROI
 from pypreprocess.nipype_preproc_fsl_utils import do_subject_preproc
 from pypreprocess.subject_data import SubjectData
 
-dataset_dir = '/neurospin/psy_sbox/hbn/RU/sourcedata/'
+dataset_dir = '/home/kamalakar/Kamalakar/work/hbn/'
 
 # preprocess the data
 subject_id = "sub-NDARHR753ZKU"
@@ -27,4 +27,5 @@ subject_data = SubjectData(
     subject_id=subject_id, func=func,
     anat=anat)
 subject_data = do_subject_preproc(subject_data, do_bet=True, do_mc=True,
-                                  do_coreg=True, do_normalize=True)
+                                  do_coreg=True, do_normalize=True,
+                                  do_smooth=True, fwhm=5.)

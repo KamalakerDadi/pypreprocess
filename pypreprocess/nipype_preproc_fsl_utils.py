@@ -10,6 +10,7 @@ import logging
 import nipype.interfaces.fsl as fsl
 import numpy as np
 from nipype.caching import Memory as NipypeMemory
+from nipype.interfaces.fsl import utils
 from sklearn.externals.joblib import Memory as JoblibMemory
 from nilearn._utils.compat import _basestring
 from .reporting.preproc_reporter import generate_preproc_undergone_docstring
@@ -93,7 +94,7 @@ def _do_subject_extract_roi(subject_data, caching, cmd_prefix,
         fsl.ExtractROI._cmd = cmd_prefix + fsl.ExtractROI._cmd
 
     extract_roi_results = extract(**_update_interface_inputs(
-        in_file=(subject_data.func[0] 
+        in_file=(subject_data.func[0]
                  if isinstance(subject_data.func, list)
                  else subject_data.func),
         t_min=t_min,
@@ -225,6 +226,59 @@ def _do_subject_mcflirt(subject_data, caching, register_to_mean,
     return subject_data.sanitize()
 
 
+def _do_subject_fsl_motion_outliers(subject_data, caching,
+                                    fsl_motion_outliers_metric,
+                                    cmd_prefix, hardlink_output, report,
+                                    **kwargs):
+    """
+    """
+    if not subject_data.func[0]:
+        warnings.warn("subject_data.func=%s (empty); skippin compute motion "
+                      "outliers step "
+                      % (subject_data.func[0]), stacklevel=2)
+        return subject_data
+
+    if caching:
+        # prepare for smart-caching
+        cache_dir = os.path.join(subject_data.scratch, 'cache_dir')
+        if not os.path.exists(cache_dir):
+            os.makedirs(cache_dir)
+        subject_data.mem = NipypeMemory(base_dir=cache_dir)
+        motion_outliers = subject_data.mem.cache(utils.MotionOutliers)
+    else:
+        motion_outliers = utils.MotionOutliers().run
+
+    if not fsl.MCFLIRT._cmd.startswith("fsl"):
+        fsl.MCFLIRT._cmd = cmd_prefix + fsl.MCFLIRT._cmd
+
+    motion_outliers_results = motion_outliers(**_update_interface_inputs(
+        in_file=subject_data.func[0], metric=fsl_motion_outliers_metric,
+        interface_kwargs=kwargs))
+
+    # failed node
+    if motion_outliers_results.outputs is None:
+        subject_data.failed = True
+        _logger.error(_INTERFACE_ERROR_MSG.format(
+            motion_outliers_results.interface, motion_outliers_results.version,
+            motion_outliers_results.inputs, motion_outliers_results.runtime.traceback))
+        return subject_data
+
+    # collect output
+    subject_data.motion_outliers = motion_outliers_results.outputs.out_file
+    subject_data.mo_plot = motion_outliers_results.outputs.out_metric_plot
+    if isinstance(subject_data.motion_outliers, _basestring):
+        assert subject_data.n_sessions == 1
+        subject_data.motion_outliers = [subject_data.motion_outliers]
+
+    subject_data.nipype_results['motion_outliers'] = motion_outliers_results
+
+    # commit output files
+    if hardlink_output:
+        subject_data.hardlink_output_files()
+
+    return subject_data.sanitize()
+
+
 def _do_subject_coregister(subject_data, caching, cmd_prefix,
                            hardlink_output, report, **kwargs):
     """
@@ -263,6 +317,8 @@ def _do_subject_coregister(subject_data, caching, cmd_prefix,
     subject_data.nipype_results['coreg'] = coreg_results
     # collect output
     subject_data.func = coreg_results.outputs.out_file
+    subject_data.func2structmat = coreg_results.outputs.out_matrix_file
+
     if isinstance(subject_data.func, _basestring):
         subject_data.func = [subject_data.func]
     # commit output files
@@ -280,8 +336,8 @@ def _do_subject_normalize(subject_data, caching, cmd_prefix,
     """
     """
     if not subject_data.func[0]:
-        warnings.warn("subject_data.func=%s (empty); skippin flirt "
-                      "coregistration step "
+        warnings.warn("subject_data.func=%s (empty); skippin fnirt and "
+                      "applywarp based normalization step "
                       % (subject_data.func[0]), stacklevel=2)
         return subject_data
 
@@ -335,6 +391,8 @@ def _do_subject_normalize(subject_data, caching, cmd_prefix,
         interface_kwargs=kwargs))
     subject_data.nipype_results['fnirt'] = fnirt_results
 
+    subject_data.fnirt_warp_file = fnirt_results.outputs.field_file
+
     if caching:
         # prepare for smart-caching
         cache_dir = os.path.join(subject_data.scratch, 'cache_dir')
@@ -367,12 +425,63 @@ def _do_subject_normalize(subject_data, caching, cmd_prefix,
     return subject_data.sanitize()
 
 
+def _do_subject_smoothing(subject_data, fwhm, caching, cmd_prefix,
+                          hardlink_output, report, **kwargs):
+    """
+    """
+    if not subject_data.func[0]:
+        warnings.warn("subject_data.func=%s (empty); skippin smoothing "
+                      "step " % (subject_data.func[0]), stacklevel=2)
+        return subject_data
+
+    if caching:
+        # prepare for smart-caching
+        cache_dir = os.path.join(subject_data.scratch, 'cache_dir')
+        if not os.path.exists(cache_dir):
+            os.makedirs(cache_dir)
+        subject_data.mem = NipypeMemory(base_dir=cache_dir)
+        smooth = subject_data.mem.cache(fsl.Smooth)
+    else:
+        smooth = fsl.Smooth().run
+
+    if not fsl.Smooth._cmd.startswith("fsl"):
+        fsl.Smooth._cmd = cmd_prefix + fsl.Smooth._cmd
+
+    smooth_results = smooth(**_update_interface_inputs(
+        in_file=subject_data.func[0], fwhm=fwhm,
+        interface_kwargs=kwargs))
+
+    # failed node
+    if smooth_results.outputs is None:
+        subject_data.failed = True
+        _logger.error(_INTERFACE_ERROR_MSG.format(
+            smooth_results.interface, smooth_results.version,
+            smooth_results.inputs, smooth_results.runtime.traceback))
+        return subject_data
+
+    subject_data.nipype_results['smooth'] = smooth_results
+    # collect output
+    subject_data.func = smooth_results.outputs.smoothed_file
+
+    # commit output files
+    if hardlink_output:
+        subject_data.hardlink_output_files()
+
+    if report:
+        subject_data.generate_smooth_thumbnails()
+    return subject_data.sanitize()
+
+
 def do_subject_preproc(subject_data,
                        do_bet=True,
                        do_mc=True,
+                       do_fsl_motion_outliers=True,
+                       fsl_motion_outliers_metric='fdrms',
                        register_to_mean=True,
                        do_coreg=True,
                        do_normalize=True,
+                       do_smooth=True,
+                       fwhm=0.,
                        remove_dummy_scans=True,
                        n_dummy_scans=5,
                        tsdiffana=True,
@@ -452,6 +561,16 @@ def do_subject_preproc(subject_data,
                                        hardlink_output=hardlink_output,
                                        report=False,
                                        **kwargs.get('fraction', {}))
+    #######################
+    #  FSL Motion Outliers
+    #######################
+    if do_fsl_motion_outliers:
+        subject_data = _do_subject_fsl_motion_outliers(
+            subject_data, caching=caching,
+            fsl_motion_outliers_metric=fsl_motion_outliers_metric,
+            cmd_prefix=cmd_prefix,
+            hardlink_output=hardlink_output,
+            report=report, **kwargs)
 
     #######################
     #  Motion correction
@@ -462,6 +581,7 @@ def do_subject_preproc(subject_data,
                                            cmd_prefix=cmd_prefix,
                                            hardlink_output=hardlink_output,
                                            report=report, **kwargs)
+
     ###################
     # Coregistration
     ###################
@@ -479,5 +599,15 @@ def do_subject_preproc(subject_data,
                                              hardlink_output=hardlink_output,
                                              report=report, do_coreg=do_coreg,
                                              **kwargs)
-
+    #########
+    # Smooth
+    #########
+    if do_smooth:
+        if not fwhm > 0.:
+            warn_msg = 'Smoothing is specified but fwhm={0}'
+            warnings.warn(warn_msg.format(fwhm), stacklevel=2)
+        subject_data = _do_subject_smoothing(subject_data, fwhm=fwhm,
+                                             caching=caching, cmd_prefix=cmd_prefix,
+                                             hardlink_output=hardlink_output,
+                                             report=report, **kwargs)
     return subject_data

@@ -503,7 +503,8 @@ class SubjectData(object):
 
         # func stuff
         self.save_realignment_parameters()
-        for item in ['func', 'realignment_parameters']:
+        for item in ['func', 'realignment_parameters', 'func2structmat',
+                     'motion_outliers', 'mo_plot', 'fnirt_warp_file']:
             tmp = []
             if hasattr(self, item):
                 filenames = getattr(self, item, self.n_sessions)
