@@ -332,6 +332,7 @@ def _do_subject_coregister(subject_data, caching, cmd_prefix,
 
 def _do_subject_normalize(subject_data, caching, cmd_prefix,
                           hardlink_output, report, do_coreg,
+                          do_ica_aroma, ica_aroma_denoise_type,
                           **kwargs):
     """
     """
@@ -416,6 +417,23 @@ def _do_subject_normalize(subject_data, caching, cmd_prefix,
     subject_data.nipype_results['applywarp'] = applywarp_results
     subject_data.func = applywarp_results.outputs.out_file
 
+    if do_ica_aroma:
+        if caching:
+            # prepare for smart-caching
+            cache_dir = os.path.join(subject_data.scratch, 'cache_dir')
+            if not os.path.exists(cache_dir):
+                os.makedirs(cache_dir)
+            subject_data.mem = NipypeMemory(base_dir=cache_dir)
+            ica_aroma = subject_data.mem.cache(fsl.ICA_AROMA)
+        else:
+            ica_aroma = fsl.ICA_AROMA().run
+
+        ica_aroma_results = ica_aroma(**_update_interface_inputs(
+            in_file=subject_data.func, mat_file=func2structmat,
+            fnirt_warp_file=fnirt_results.outputs.field_file,
+            motion_parameters=subject_data.realignment_parameters[0],
+            denoise_type=ica_aroma_denoise_type, interface_kwargs=kwargs))
+
     # commit output files
     if hardlink_output:
         subject_data.hardlink_output_files()
@@ -481,6 +499,8 @@ def do_subject_preproc(subject_data,
                        do_coreg=True,
                        do_normalize=True,
                        do_smooth=True,
+                       do_ica_aroma=False,
+                       ica_aroma_denoise_type='nonaggr',
                        fwhm=0.,
                        remove_dummy_scans=True,
                        n_dummy_scans=5,
@@ -581,6 +601,12 @@ def do_subject_preproc(subject_data,
                                            cmd_prefix=cmd_prefix,
                                            hardlink_output=hardlink_output,
                                            report=report, **kwargs)
+    else:
+        if do_ica_aroma:
+            raise ValueError("ICA Aroma is set to True but you have not "
+                             "set MCFLIRT to True. "
+                             "Realignment parameters are necessary to do "
+                             "to do ICA Aroma. ")
 
     ###################
     # Coregistration
@@ -590,6 +616,13 @@ def do_subject_preproc(subject_data,
                                               cmd_prefix=cmd_prefix,
                                               hardlink_output=hardlink_output,
                                               report=report, **kwargs)
+    else:
+        if do_ica_aroma:
+            raise ValueError("ICA Aroma is set to True but you have not "
+                             "set co-registration step to True. "
+                             "Coregistration is a required step "
+                             "to do ICA Aroma since ICA Aroma uses "
+                             "func_to_struct.mat file from co-registration.")
     ##########################
     # Spatial normalization
     ##########################
@@ -598,7 +631,16 @@ def do_subject_preproc(subject_data,
                                              cmd_prefix=cmd_prefix,
                                              hardlink_output=hardlink_output,
                                              report=report, do_coreg=do_coreg,
+                                             do_ica_aroma=do_ica_aroma,
+                                             ica_aroma_denoise_type=ica_aroma_denoise_type,
                                              **kwargs)
+    else:
+        if do_ica_aroma:
+            raise ValueError("ICA Aroma is set to True but you have not "
+                             "set spatial normalization to True. "
+                             "Spatial normalization is a required step "
+                             "to do ICA Aroma. ICA Aroma used fnirt warp "
+                             "file from spatial normalization.")
     #########
     # Smooth
     #########
@@ -610,4 +652,5 @@ def do_subject_preproc(subject_data,
                                              caching=caching, cmd_prefix=cmd_prefix,
                                              hardlink_output=hardlink_output,
                                              report=report, **kwargs)
+
     return subject_data

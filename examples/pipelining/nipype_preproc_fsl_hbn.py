@@ -28,4 +28,5 @@ subject_data = SubjectData(
     anat=anat)
 subject_data = do_subject_preproc(subject_data, do_bet=True, do_mc=True,
                                   do_coreg=True, do_normalize=True,
+                                  do_ica_aroma=True,
                                   do_smooth=True, fwhm=5.)
