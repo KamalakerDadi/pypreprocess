@@ -333,7 +333,6 @@ def _do_subject_coregister(subject_data, caching, cmd_prefix,
 
 def _do_subject_normalize(subject_data, caching, cmd_prefix,
                           hardlink_output, report, do_coreg,
-                          do_ica_aroma, ica_aroma_denoise_type,
                           **kwargs):
     """
     """
@@ -418,76 +417,12 @@ def _do_subject_normalize(subject_data, caching, cmd_prefix,
     subject_data.nipype_results['applywarp'] = applywarp_results
     subject_data.func = applywarp_results.outputs.out_file
 
-    if do_ica_aroma:
-        if caching:
-            # prepare for smart-caching
-            cache_dir = os.path.join(subject_data.scratch, 'cache_dir')
-            if not os.path.exists(cache_dir):
-                os.makedirs(cache_dir)
-            subject_data.mem = NipypeMemory(base_dir=cache_dir)
-            ica_aroma = subject_data.mem.cache(fsl.ICA_AROMA)
-        else:
-            ica_aroma = fsl.ICA_AROMA().run
-
-        ica_aroma_results = ica_aroma(**_update_interface_inputs(
-            in_file=subject_data.func, mat_file=func2structmat,
-            fnirt_warp_file=fnirt_results.outputs.field_file,
-            motion_parameters=subject_data.realignment_parameters[0],
-            denoise_type=ica_aroma_denoise_type, interface_kwargs=kwargs))
-
     # commit output files
     if hardlink_output:
         subject_data.hardlink_output_files()
 
     if report:
         subject_data.generate_normalization_thumbnails()
-    return subject_data.sanitize()
-
-
-def _do_subject_smoothing(subject_data, fwhm, caching, cmd_prefix,
-                          hardlink_output, report, **kwargs):
-    """
-    """
-    if not subject_data.func[0]:
-        warnings.warn("subject_data.func=%s (empty); skippin smoothing "
-                      "step " % (subject_data.func[0]), stacklevel=2)
-        return subject_data
-
-    if caching:
-        # prepare for smart-caching
-        cache_dir = os.path.join(subject_data.scratch, 'cache_dir')
-        if not os.path.exists(cache_dir):
-            os.makedirs(cache_dir)
-        subject_data.mem = NipypeMemory(base_dir=cache_dir)
-        smooth = subject_data.mem.cache(fsl.Smooth)
-    else:
-        smooth = fsl.Smooth().run
-
-    if not fsl.Smooth._cmd.startswith("fsl"):
-        fsl.Smooth._cmd = cmd_prefix + fsl.Smooth._cmd
-
-    smooth_results = smooth(**_update_interface_inputs(
-        in_file=subject_data.func[0], fwhm=fwhm,
-        interface_kwargs=kwargs))
-
-    # failed node
-    if smooth_results.outputs is None:
-        subject_data.failed = True
-        _logger.error(_INTERFACE_ERROR_MSG.format(
-            smooth_results.interface, smooth_results.version,
-            smooth_results.inputs, smooth_results.runtime.traceback))
-        return subject_data
-
-    subject_data.nipype_results['smooth'] = smooth_results
-    # collect output
-    subject_data.func = smooth_results.outputs.smoothed_file
-
-    # commit output files
-    if hardlink_output:
-        subject_data.hardlink_output_files()
-
-    if report:
-        subject_data.generate_smooth_thumbnails()
     return subject_data.sanitize()
 
 
