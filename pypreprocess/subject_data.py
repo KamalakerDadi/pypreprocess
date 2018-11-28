@@ -490,8 +490,8 @@ class SubjectData(object):
         self._set_session_ids()
 
         # anat stuff
-        for item in ['anat', 'gm', 'wm', 'csf', 'wgm', 'wwm', 'wcsf',
-                     'mwgm', 'mwwm', 'mwcsf']:
+        for item in ['anat', 'anat_mask', 'gm', 'wm', 'csf', 'wgm', 'wwm',
+                     'wcsf', 'mwgm', 'mwwm', 'mwcsf']:
             if hasattr(self, item):
                 filename = getattr(self, item)
                 if filename is not None:

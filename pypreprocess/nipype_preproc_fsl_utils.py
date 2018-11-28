@@ -144,7 +144,7 @@ def _do_subject_bet(subject_data, caching, cmd_prefix,
         fsl.BET._cmd = cmd_prefix + fsl.BET._cmd
 
     bet_results = bet(**_update_interface_inputs(
-        in_file=subject_data.anat, interface_kwargs=kwargs))
+        in_file=subject_data.anat, mask=True, interface_kwargs=kwargs))
 
     # failed node
     if bet_results.outputs is None:
@@ -156,6 +156,7 @@ def _do_subject_bet(subject_data, caching, cmd_prefix,
 
     # collect output
     subject_data.anat = bet_results.outputs.out_file
+    subject_data.anat_mask = bet_results.outputs.mask_file
 
     subject_data.nipype_results['bet'] = bet_results
 
@@ -490,6 +491,88 @@ def _do_subject_smoothing(subject_data, fwhm, caching, cmd_prefix,
     return subject_data.sanitize()
 
 
+def _do_subject_smoothing(subject_data, fwhm, caching, cmd_prefix,
+                          hardlink_output, report, **kwargs):
+    """
+    """
+    if not subject_data.func[0]:
+        warnings.warn("subject_data.func=%s (empty); skippin smoothing "
+                      "step " % (subject_data.func[0]), stacklevel=2)
+        return subject_data
+
+    if caching:
+        # prepare for smart-caching
+        cache_dir = os.path.join(subject_data.scratch, 'cache_dir')
+        if not os.path.exists(cache_dir):
+            os.makedirs(cache_dir)
+        subject_data.mem = NipypeMemory(base_dir=cache_dir)
+        smooth = subject_data.mem.cache(fsl.Smooth)
+    else:
+        smooth = fsl.Smooth().run
+
+    if not fsl.Smooth._cmd.startswith("fsl"):
+        fsl.Smooth._cmd = cmd_prefix + fsl.Smooth._cmd
+
+    smooth_results = smooth(**_update_interface_inputs(
+        in_file=subject_data.func[0], fwhm=fwhm,
+        interface_kwargs=kwargs))
+
+    # failed node
+    if smooth_results.outputs is None:
+        subject_data.failed = True
+        _logger.error(_INTERFACE_ERROR_MSG.format(
+            smooth_results.interface, smooth_results.version,
+            smooth_results.inputs, smooth_results.runtime.traceback))
+        return subject_data
+
+    subject_data.nipype_results['smooth'] = smooth_results
+    # collect output
+    subject_data.func = smooth_results.outputs.smoothed_file
+
+    # commit output files
+    if hardlink_output:
+        subject_data.hardlink_output_files()
+
+    if report:
+        subject_data.generate_smooth_thumbnails()
+    return subject_data.sanitize()
+
+
+def _do_subject_ica_aroma(subject_data, ica_aroma_denoise_type,
+                          caching, hardlink_output, **kwargs):
+    """
+    """
+    if not subject_data.func[0]:
+        warnings.warn("subject_data.func=%s (empty); skipping ICA-AROMA "
+                      "step " % (subject_data.func[0]), stacklevel=2)
+        return subject_data
+
+    if caching:
+        # prepare for smart-caching
+        cache_dir = os.path.join(subject_data.scratch, 'cache_dir')
+        if not os.path.exists(cache_dir):
+            os.makedirs(cache_dir)
+        subject_data.mem = NipypeMemory(base_dir=cache_dir)
+        ica_aroma = subject_data.mem.cache(fsl.ICA_AROMA)
+    else:
+        ica_aroma = fsl.ICA_AROMA().run
+
+    func2structmat = subject_data.nipype_results['coreg'].outputs.out_matrix_file
+    ica_aroma_results = ica_aroma(**_update_interface_inputs(
+        in_file=subject_data.func, mat_file=func2structmat,
+        fnirt_warp_file=fnirt_results.outputs.field_file,
+        motion_parameters=subject_data.realignment_parameters[0],
+        denoise_type=ica_aroma_denoise_type, interface_kwargs=kwargs))
+
+    # commit output files
+    if hardlink_output:
+        subject_data.hardlink_output_files()
+
+    if report:
+        subject_data.generate_normalization_thumbnails()
+    return subject_data.sanitize()
+
+
 def do_subject_preproc(subject_data,
                        do_bet=True,
                        do_mc=True,
@@ -606,7 +689,7 @@ def do_subject_preproc(subject_data,
             raise ValueError("ICA Aroma is set to True but you have not "
                              "set MCFLIRT to True. "
                              "Realignment parameters are necessary to do "
-                             "to do ICA Aroma. ")
+                             "ICA Aroma. ")
 
     ###################
     # Coregistration
@@ -631,8 +714,6 @@ def do_subject_preproc(subject_data,
                                              cmd_prefix=cmd_prefix,
                                              hardlink_output=hardlink_output,
                                              report=report, do_coreg=do_coreg,
-                                             do_ica_aroma=do_ica_aroma,
-                                             ica_aroma_denoise_type=ica_aroma_denoise_type,
                                              **kwargs)
     else:
         if do_ica_aroma:
@@ -652,5 +733,14 @@ def do_subject_preproc(subject_data,
                                              caching=caching, cmd_prefix=cmd_prefix,
                                              hardlink_output=hardlink_output,
                                              report=report, **kwargs)
+    ############
+    # ICA-Aroma
+    ############
+    if do_ica_aroma:
+        subject_data = _do_subject_ica_aroma(subject_data,
+                                             ica_aroma_denoise_type=ica_aroma_denoise_type,
+                                             caching=caching,
+                                             hardlink_output=hardlink_output,
+                                             **kwargs)
 
     return subject_data
