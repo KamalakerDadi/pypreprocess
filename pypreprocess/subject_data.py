@@ -491,7 +491,8 @@ class SubjectData(object):
 
         # anat stuff
         for item in ['anat', 'anat_mask', 'gm', 'wm', 'csf', 'wgm', 'wwm',
-                     'wcsf', 'mwgm', 'mwwm', 'mwcsf']:
+                     'wcsf', 'mwgm', 'mwwm', 'mwcsf', 'nonaggr_denoised_file',
+                     'aggr_denoised_file']:
             if hasattr(self, item):
                 filename = getattr(self, item)
                 if filename is not None:

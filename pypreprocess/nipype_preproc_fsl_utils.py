@@ -18,6 +18,7 @@ from .subject_data import SubjectData
 
 fsl.FSLCommand.set_default_output_type('NIFTI_GZ')
 FSL_T1_TEMPLATE = "/usr/share/fsl/data/standard/MNI152_T1_2mm_brain.nii.gz"
+FSL_T1_MASK = "/usr/share/fsl/data/standard/MNI152_T1_2mm_brain_mask.nii.gz"
 FSL_WARP_TEMPLATE = "/usr/share/fsl/data/standard/MNI152_T1_2mm.nii.gz"
 
 _logger = logging.getLogger("pypreprocess")
@@ -410,7 +411,7 @@ def _do_subject_normalize(subject_data, caching, cmd_prefix,
     # Apply final transform
     func2structmat = subject_data.nipype_results['coreg'].outputs.out_matrix_file
     applywarp_results = applywarp(**_update_interface_inputs(
-        ref_file=FSL_WARP_TEMPLATE,
+        ref_file=FSL_WARP_TEMPLATE, mask_file=FSL_T1_MASK,
         in_file=subject_data.nipype_results['coreg'].inputs["in_file"],
         field_file=fnirt_results.outputs.field_file,
         premat=func2structmat, interface_kwargs=kwargs))
@@ -493,18 +494,30 @@ def _do_subject_ica_aroma(subject_data, ica_aroma_denoise_type,
         ica_aroma = fsl.ICA_AROMA().run
 
     func2structmat = subject_data.nipype_results['coreg'].outputs.out_matrix_file
+    field_file = subject_data.nipype_results['fnirt'].outputs.field_file
     ica_aroma_results = ica_aroma(**_update_interface_inputs(
-        in_file=subject_data.func, mat_file=func2structmat,
-        fnirt_warp_file=fnirt_results.outputs.field_file,
+        in_file=subject_data.func[0], mat_file=func2structmat,
+        fnirt_warp_file=field_file, mask=FSL_T1_MASK,
         motion_parameters=subject_data.realignment_parameters[0],
         denoise_type=ica_aroma_denoise_type, interface_kwargs=kwargs))
+
+    if ica_aroma_results is not None:
+        if ica_aroma_results.outputs.nonaggr_denoised_file is not None:
+            subject_data.nonaggr_denoised_file = ica_aroma_results.outputs.nonaggr_denoised_file
+        elif ica_aroma_results.outputs.aggr_denoised_file is not None:
+            subject_data.aggr_denoised_file = ica_aroma_results.outputs.aggr_denoised_file
+        else:
+            warnings.warn("ICA aroma denoised files are not found to assign to "
+                          "subject_data.", stacklevel=2)
+    else:
+        warnings.warn("ICA aroma denoising failed. Return subjec_data as it is.",
+                      stacklevel=2)
+        return subject_data
 
     # commit output files
     if hardlink_output:
         subject_data.hardlink_output_files()
 
-    if report:
-        subject_data.generate_normalization_thumbnails()
     return subject_data.sanitize()
 
 
