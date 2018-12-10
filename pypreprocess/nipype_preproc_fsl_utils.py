@@ -1,5 +1,5 @@
 """
-Author: Bertrand Thirion, Alexandre Abraham, DOHMATOB Elvis Dopgima
+Author: Bertrand Thirion, Alexandre Abraham, DOHMATOB Elvis Dopgima, Kamalaker Dadi
 
 """
 
@@ -44,7 +44,7 @@ def _get_file_ext(filename):
 def _get_output_filename(input_filename, output_dir, output_prefix='',
                          ext=None):
     if isinstance(input_filename, _basestring):
-        if not ext is None:
+        if ext is not None:
             ext = "." + ext if not ext.startswith('.') else ext
             input_filename = _get_file_ext(input_filename)[0] + ext
 
@@ -71,23 +71,92 @@ def do_fsl_merge(in_files, output_dir, output_prefix='merged_',
     return output_filename
 
 
-def _do_subject_extract_roi(subject_data, caching, cmd_prefix,
-                            t_min, hardlink_output, output_prefix='extract_',
-                            **kwargs):
+def _cache_interface(subject_data, function):
+    """Caching Nipype interface
+
+    Parameters
+    ----------
+    subject_data : `SubjectData` instance
+        object that encapsulates the data for the subject (should have fields
+        like scratch - which is a directory to cache the intermediary
+        results)
+
+    function : callable
+        The callable function to cache. Eg fsl.ExtractROI, fsl.MCFLIRT
+
+    Returns
+    -------
+    function : callable
+        An input function is cached function and returned
     """
+    cache_dir = os.path.join(subject_data.scratch, 'cache_dir')
+    if not os.path.exists(cache_dir):
+        os.makedirs(cache_dir)
+    subject_data.mem = NipypeMemory(base_dir=cache_dir)
+    function = subject_data.mem.cache(function)
+    return subject_data, function
+
+
+def _error_if_node_is_failed(interface):
+    """Logging error
+
+    Parameters
+    ----------
+    interface : An interface input having an arguments in
+        interface, version, inputs, runtime.traceback
+    """
+    _logger.error(_INTERFACE_ERROR_MSG.format(
+        interface.interface, interface.version,
+        interface.inputs, interface.runtime.traceback))
+    return
+
+
+def _do_subject_extract_roi(subject_data, caching, cmd_prefix,
+                            t_min, hardlink_output, **kwargs):
+    """Removal of number of dummy scans from functional MRI data.
+
+    Helper function to run fsl.ExtractROI
+
+    Parameters
+    ----------
+    subject_data : `SubjectData` instance
+        object that encapsulates the data for the subject (should have fields
+        like func - which is a functional MRI image)
+
+    caching : bool
+        If caching needs to be done or not. If yes, results are stored
+        using NipypeMemory.
+
+    cmd_prefix : str
+        Command prefix for FSL command lines "fsl5.0-".
+
+    t_min : int
+        Number of volumes to remove.
+
+    hardlink_output : bool
+        If True, then output files will be hard-linked from the respective
+        nipype cache directories, to the subject's immediate output directory
+        (subject_data.output_dir)
+
+    Returns
+    -------
+    subject_data : `SubjectData` instance
+
+        - func: A functional image where dummy scans are removed. This is
+        saved in subject_data.output_dir if hardlink_output is True with name
+        at the end prefixed as xxxx_roi.nii.gz
+
     """
     if not subject_data.func[0]:
         warnings.warn("subject_data.func=%s (empty); skippin dummy scans "
                       "removal step "
                       % (subject_data.func[0]), stacklevel=2)
         return subject_data
+
     if caching:
         # prepare for smart-caching
-        cache_dir = os.path.join(subject_data.scratch, 'cache_dir')
-        if not os.path.exists(cache_dir):
-            os.makedirs(cache_dir)
-        subject_data.mem = NipypeMemory(base_dir=cache_dir)
-        extract = subject_data.mem.cache(fsl.ExtractROI)
+        subject_data, extract = _cache_interface(subject_data,
+                                                 fsl.ExtractROI)
     else:
         extract = fsl.ExtractROI().run
 
@@ -105,9 +174,7 @@ def _do_subject_extract_roi(subject_data, caching, cmd_prefix,
     # failed node
     if extract_roi_results.outputs is None:
         subject_data.failed = True
-        _logger.error(_INTERFACE_ERROR_MSG.format(
-            extract_roi_results.interface, extract_roi_results.version,
-            extract_roi_results.inputs, extract_roi_results.runtime.traceback))
+        _error_if_node_is_failed(extract_roi_results)
         return subject_data
 
     # collect output
@@ -123,8 +190,41 @@ def _do_subject_extract_roi(subject_data, caching, cmd_prefix,
 
 
 def _do_subject_bet(subject_data, caching, cmd_prefix,
-                    hardlink_output, report, **kwargs):
-    """
+                    hardlink_output, **kwargs):
+    """FSL BET extraction on anatomical/structural T1 data.
+
+    Helper function to run fsl.BET
+
+    By default, mask is set as True to output the mask.
+
+    Parameters
+    ----------
+    subject_data : `SubjectData` instance
+        object that encapsulates the data for the subject (should have fields
+        like anat - which is an anatomical MRI image)
+
+    caching : bool
+        If caching needs to be done or not. If yes, results are stored
+        using NipypeMemory.
+
+    cmd_prefix : str
+        Command prefix for FSL command lines "fsl5.0-".
+
+    hardlink_output : bool
+        If True, then output files will be hard-linked from the respective
+        nipype cache directories, to the subject's immediate output directory
+        (subject_data.output_dir)
+
+    Returns
+    -------
+    subject_data : `SubjectData` instance
+
+        - anat : A BET extracted anatomical image. This is
+        saved in subject_data.output_dir if hardlink_output is True with name
+        at the end prefixed as xxxx_brain.nii.gz
+
+        - mask : A BET extracted mask image. Saved as xxxx_brain_mask.nii.gz
+
     """
     if not subject_data.anat:
         warnings.warn("subject_data.anat=%s (empty); skippin Brain Extraction"
@@ -133,11 +233,7 @@ def _do_subject_bet(subject_data, caching, cmd_prefix,
 
     if caching:
         # prepare for smart-caching
-        cache_dir = os.path.join(subject_data.scratch, 'cache_dir')
-        if not os.path.exists(cache_dir):
-            os.makedirs(cache_dir)
-        subject_data.mem = NipypeMemory(base_dir=cache_dir)
-        bet = subject_data.mem.cache(fsl.BET)
+        subject_data, bet = _cache_interface(subject_data, fsl.BET)
     else:
         bet = fsl.BET().run
 
@@ -150,9 +246,7 @@ def _do_subject_bet(subject_data, caching, cmd_prefix,
     # failed node
     if bet_results.outputs is None:
         subject_data.failed = True
-        _logger.error(_INTERFACE_ERROR_MSG.format(
-            bet_results.interface, bet_results.version,
-            bet_results.inputs, bet_results.runtime.traceback))
+        _error_if_node_is_failed(bet_results)
         return subject_data
 
     # collect output
@@ -168,9 +262,53 @@ def _do_subject_bet(subject_data, caching, cmd_prefix,
     return subject_data.sanitize()
 
 
-def _do_subject_mcflirt(subject_data, caching, register_to_mean,
+def _do_subject_mcflirt(subject_data, caching, register_to_mean, cost,
                         cmd_prefix, hardlink_output, report, **kwargs):
-    """
+    """Runs motion correction using FSL MCFLIRT on functional MRI data.
+
+    Helper function to run fsl.MCFLIRT to register to mean volume (by default).
+
+    By default, the cost function it uses is 'mutualinfo'
+
+    Parameters
+    ----------
+    subject_data : `SubjectData` instance
+        object that encapsulates the data for the subject (should have fields
+        like func - which is a functional MRI image)
+
+    caching : bool
+        If caching needs to be done or not. If yes, results are stored
+        using NipypeMemory.
+
+    register_to_mean : bool
+        Register to mean volume.
+
+    cost : str ('mutualinfo', 'woods', 'corratio', 'normcorr', 'normmi',
+                'leastsquares')
+        Cost function to optimize.
+
+    cmd_prefix : str
+        Command prefix for FSL command lines "fsl5.0-".
+
+    hardlink_output : bool
+        If True, then output files will be hard-linked from the respective
+        nipype cache directories, to the subject's immediate output directory
+        (subject_data.output_dir)
+
+    report : bool
+        If True, rotation and translation curves are reported to html report.
+
+    Returns
+    -------
+    subject_data : `SubjectData` instance
+
+        - func : A motion corrected functional image. This is
+        saved in subject_data.output_dir if hardlink_output is True with name
+        at the end prefixed as xxxx_roi_mcf.nii.gz
+
+        - motion correction parameter : A .par file contains translation and
+        rotation each in (x, y, z)
+
     """
     if not subject_data.func[0]:
         warnings.warn("subject_data.func=%s (empty); skippin mcflirt "
@@ -180,11 +318,8 @@ def _do_subject_mcflirt(subject_data, caching, register_to_mean,
 
     if caching:
         # prepare for smart-caching
-        cache_dir = os.path.join(subject_data.scratch, 'cache_dir')
-        if not os.path.exists(cache_dir):
-            os.makedirs(cache_dir)
-        subject_data.mem = NipypeMemory(base_dir=cache_dir)
-        mcflirt = subject_data.mem.cache(fsl.MCFLIRT)
+        subject_data, mcflirt = _cache_interface(subject_data,
+                                                 fsl.MCFLIRT)
     else:
         mcflirt = fsl.MCFLIRT().run
 
@@ -193,15 +328,13 @@ def _do_subject_mcflirt(subject_data, caching, register_to_mean,
 
     mcflirt_results = mcflirt(**_update_interface_inputs(
         in_file=subject_data.func[0], mean_vol=register_to_mean,
-        cost='mutualinfo', save_mats=True, save_plots=True,
+        cost=cost, save_mats=True, save_plots=True,
         interface_kwargs=kwargs))
 
     # failed node
     if mcflirt_results.outputs is None:
         subject_data.failed = True
-        _logger.error(_INTERFACE_ERROR_MSG.format(
-            mcflirt_results.interface, mcflirt_results.version,
-            mcflirt_results.inputs, mcflirt_results.runtime.traceback))
+        _error_if_node_is_failed(mcflirt_results)
         return subject_data
 
     # collect output
@@ -230,9 +363,50 @@ def _do_subject_mcflirt(subject_data, caching, register_to_mean,
 
 def _do_subject_fsl_motion_outliers(subject_data, caching,
                                     fsl_motion_outliers_metric,
-                                    cmd_prefix, hardlink_output, report,
-                                    **kwargs):
-    """
+                                    cmd_prefix, hardlink_output, **kwargs):
+    """Finds motion outliers on functional MRI data.
+
+    Helper function to run fsl.MotionOutliers.
+
+    By default, the Frame Displacement FD with Root Mean Square matrix
+    is estimated ('fdrms').
+
+    There is no html reporting for this run but a simple png file is saved
+    to subject_data.output_dir
+
+    Parameters
+    ----------
+    subject_data : `SubjectData` instance
+        object that encapsulates the data for the subject (should have fields
+        like func - which is a functional MRI image)
+
+    caching : bool
+        If caching needs to be done or not. If yes, results are stored
+        using NipypeMemory.
+
+    fsl_motion_outliers_metrics : str ('refrms', 'dvars', 'refmse', 'fd',
+                                       'fdrms')
+        metrics to choose to compute motion outliers.
+
+    cmd_prefix : str
+        Command prefix for FSL command lines "fsl5.0-".
+
+    hardlink_output : bool
+        If True, then output files will be hard-linked from the respective
+        nipype cache directories, to the subject's immediate output directory
+        (subject_data.output_dir)
+
+    report : bool
+        If True, rotation and translation curves are reported to html report.
+
+    Returns
+    -------
+    subject_data : `SubjectData` instance
+
+        - out_file : A motion outliers values in .txt is generated and
+        saved in subject_data.output_dir if hardlink_output is True with name
+        at the end prefixed as xxxx_outliers.txt
+
     """
     if not subject_data.func[0]:
         warnings.warn("subject_data.func=%s (empty); skippin compute motion "
@@ -242,11 +416,8 @@ def _do_subject_fsl_motion_outliers(subject_data, caching,
 
     if caching:
         # prepare for smart-caching
-        cache_dir = os.path.join(subject_data.scratch, 'cache_dir')
-        if not os.path.exists(cache_dir):
-            os.makedirs(cache_dir)
-        subject_data.mem = NipypeMemory(base_dir=cache_dir)
-        motion_outliers = subject_data.mem.cache(utils.MotionOutliers)
+        subject_data, motion_outliers = _cache_interface(subject_data,
+                                                         utils.MotionOutliers)
     else:
         motion_outliers = utils.MotionOutliers().run
 
@@ -260,9 +431,7 @@ def _do_subject_fsl_motion_outliers(subject_data, caching,
     # failed node
     if motion_outliers_results.outputs is None:
         subject_data.failed = True
-        _logger.error(_INTERFACE_ERROR_MSG.format(
-            motion_outliers_results.interface, motion_outliers_results.version,
-            motion_outliers_results.inputs, motion_outliers_results.runtime.traceback))
+        _error_if_node_is_failed(motion_outliers_results)
         return subject_data
 
     # collect output
@@ -283,7 +452,43 @@ def _do_subject_fsl_motion_outliers(subject_data, caching,
 
 def _do_subject_coregister(subject_data, caching, cmd_prefix,
                            hardlink_output, report, **kwargs):
-    """
+    """FLIRT based co-registration of functional data to anatomical data.
+
+    Helper function to run fsl.FLIRT to register func2struct.
+
+    By default, 6 dof is used for this co-registration
+
+    Parameters
+    ----------
+    subject_data : `SubjectData` instance
+        object that encapsulates the data for the subject (should have fields
+        like func - which is a functional MRI image)
+
+    caching : bool
+        If caching needs to be done or not. If yes, results are stored
+        using NipypeMemory.
+
+    cmd_prefix : str
+        Command prefix for FSL command lines "fsl5.0-".
+
+    hardlink_output : bool
+        If True, then output files will be hard-linked from the respective
+        nipype cache directories, to the subject's immediate output directory
+        (subject_data.output_dir)
+
+    report : bool
+        If True, the alignment of anatomical image is overlayed on mean
+        functional image for visual inspection alongside with other runs
+        in html report.
+
+    Returns
+    -------
+    subject_data : `SubjectData` instance
+
+        - out_file : A motion outliers values in .txt is generated and
+        saved in subject_data.output_dir if hardlink_output is True with name
+        at the end prefixed as xxxx_outliers.txt
+
     """
     if not subject_data.func[0]:
         warnings.warn("subject_data.func=%s (empty); skippin flirt "
@@ -293,11 +498,7 @@ def _do_subject_coregister(subject_data, caching, cmd_prefix,
 
     if caching:
         # prepare for smart-caching
-        cache_dir = os.path.join(subject_data.scratch, 'cache_dir')
-        if not os.path.exists(cache_dir):
-            os.makedirs(cache_dir)
-        subject_data.mem = NipypeMemory(base_dir=cache_dir)
-        flirt = subject_data.mem.cache(fsl.FLIRT)
+        subject_data, flirt = _cache_interface(subject_data, fsl.FLIRT)
     else:
         flirt = fsl.FLIRT().run
 
@@ -311,9 +512,7 @@ def _do_subject_coregister(subject_data, caching, cmd_prefix,
     # failed node
     if coreg_results.outputs is None:
         subject_data.failed = True
-        _logger.error(_INTERFACE_ERROR_MSG.format(
-            coreg_results.interface, coreg_results.version,
-            coreg_results.inputs, coreg_results.runtime.traceback))
+        _error_if_node_is_failed(coreg_results)
         return subject_data
 
     subject_data.nipype_results['coreg'] = coreg_results
@@ -527,6 +726,7 @@ def do_subject_preproc(subject_data,
                        do_fsl_motion_outliers=True,
                        fsl_motion_outliers_metric='fdrms',
                        register_to_mean=True,
+                       cost='mutualinfo',
                        do_coreg=True,
                        do_normalize=True,
                        do_smooth=True,
@@ -535,7 +735,6 @@ def do_subject_preproc(subject_data,
                        fwhm=0.,
                        remove_dummy_scans=True,
                        n_dummy_scans=5,
-                       tsdiffana=True,
                        cmd_prefix="fsl5.0-",
                        report=True,
                        parent_results_gallery=None,
@@ -571,8 +770,7 @@ def do_subject_preproc(subject_data,
 
         # initialize report factory
         subject_data.init_report(parent_results_gallery=parent_results_gallery,
-                                 preproc_undergone=preproc_undergone,
-                                 tsdiffana=tsdiffana)
+                                 preproc_undergone=preproc_undergone)
 
     else:
         subject_data._set_session_ids()
@@ -629,6 +827,7 @@ def do_subject_preproc(subject_data,
     if do_mc:
         subject_data = _do_subject_mcflirt(subject_data, caching=caching,
                                            register_to_mean=register_to_mean,
+                                           cost=cost,
                                            cmd_prefix=cmd_prefix,
                                            hardlink_output=hardlink_output,
                                            report=report, **kwargs)
