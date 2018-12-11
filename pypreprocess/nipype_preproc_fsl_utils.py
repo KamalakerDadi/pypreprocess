@@ -534,9 +534,65 @@ def _do_subject_coregister(subject_data, caching, cmd_prefix,
 def _do_subject_normalize(subject_data, caching, cmd_prefix,
                           hardlink_output, report, do_coreg,
                           **kwargs):
+    """FNIRT based non-linear registration of functional data
+       to FSL T1 template (via structural scan).
+
+    This helper function does the following steps:
+
+        1. Runs fsl.FLIRT to register structural scan to FSL T1 template.
+           Saves affine transformation matrix file. Outputs registered
+           structural scan.
+
+        2. Then, runs non-linear transformation on structural scan to save
+           non-linear warp file.
+
+        3. At last runs applywarp using pre-computed matrix file from step 1
+           and warp from step 2, on functional data using FSL T1 template
+           as the reference. Outputs functional data.
+
+    Please note that this step is dependent on prior co-registration of
+    structural scan to functional MRI image. If do_coreg is given as False,
+    then this step is skipped.
+
+    Parameters
+    ----------
+    subject_data : `SubjectData` instance
+        object that encapsulates the data for the subject (should have fields
+        like anat, func - which is a structural scan and functional MRI image)
+
+    caching : bool
+        If caching needs to be done or not. If yes, results are stored
+        using NipypeMemory.
+
+    cmd_prefix : str
+        Command prefix for FSL command lines "fsl5.0-".
+
+    hardlink_output : bool
+        If True, then output files will be hard-linked from the respective
+        nipype cache directories, to the subject's immediate output directory
+        (subject_data.output_dir)
+
+    report : bool
+        If True, the alignment of anatomical image is overlayed on mean
+        functional image for visual inspection alongside with other runs
+        in html report.
+
+    do_coreg : bool
+        This step indicates whether registration of structural scan to
+        functional MRI image is chosen or not. If not chosen, then
+        this normalization step is skipped.
+
+    Returns
+    -------
+    subject_data : `SubjectData` instance
+
+        - out_file : A structural scan and functional MRI image
+        registered to FSL T1 template. This image is
+        saved in subject_data.output_dir if hardlink_output is True with name
+        at the end prefixed as xxxx_warp.nii.gz
+
     """
-    """
-    if not subject_data.func[0]:
+    if not subject_data.func[0] or not do_coreg:
         warnings.warn("subject_data.func=%s (empty); skippin fnirt and "
                       "applywarp based normalization step "
                       % (subject_data.func[0]), stacklevel=2)
@@ -544,16 +600,14 @@ def _do_subject_normalize(subject_data, caching, cmd_prefix,
 
     if caching:
         # prepare for smart-caching
-        cache_dir = os.path.join(subject_data.scratch, 'cache_dir')
-        if not os.path.exists(cache_dir):
-            os.makedirs(cache_dir)
-        subject_data.mem = NipypeMemory(base_dir=cache_dir)
-        flirt = subject_data.mem.cache(fsl.FLIRT)
+        subject_data, flirt = _cache_interface(subject_data, fsl.FLIRT)
     else:
         flirt = fsl.FLIRT().run
 
     if not fsl.FLIRT._cmd.startswith("fsl"):
         fsl.FLIRT._cmd = cmd_prefix + fsl.FLIRT._cmd
+
+    # Step 1:
 
     norm_results = flirt(**_update_interface_inputs(
         in_file=subject_data.anat, reference=FSL_T1_TEMPLATE,
@@ -562,9 +616,7 @@ def _do_subject_normalize(subject_data, caching, cmd_prefix,
     # failed node
     if norm_results.outputs is None:
         subject_data.failed = True
-        _logger.error(_INTERFACE_ERROR_MSG.format(
-            norm_results.interface, norm_results.version,
-            norm_results.inputs, norm_results.runtime.traceback))
+        _error_if_node_is_failed(norm_results)
         return subject_data
 
     subject_data.nipype_results['flirt2'] = norm_results
@@ -573,16 +625,15 @@ def _do_subject_normalize(subject_data, caching, cmd_prefix,
 
     if caching:
         # prepare for smart-caching
-        cache_dir = os.path.join(subject_data.scratch, 'cache_dir')
-        if not os.path.exists(cache_dir):
-            os.makedirs(cache_dir)
-        subject_data.mem = NipypeMemory(base_dir=cache_dir)
-        fnirt = subject_data.mem.cache(fsl.FNIRT)
+        subject_data, fnirt = _cache_interface(subject_data, fsl.FNIRT)
     else:
         fnirt = fsl.FNIRT().run
 
     if not fsl.FNIRT._cmd.startswith("fsl"):
         fsl.FNIRT._cmd = cmd_prefix + fsl.FNIRT._cmd
+
+    # Step 2:
+
     struct_file = subject_data.nipype_results['bet'].inputs['in_file']
     fnirt_results = fnirt(**_update_interface_inputs(
         affine_file=norm_results.outputs.out_matrix_file,
@@ -596,16 +647,15 @@ def _do_subject_normalize(subject_data, caching, cmd_prefix,
 
     if caching:
         # prepare for smart-caching
-        cache_dir = os.path.join(subject_data.scratch, 'cache_dir')
-        if not os.path.exists(cache_dir):
-            os.makedirs(cache_dir)
-        subject_data.mem = NipypeMemory(base_dir=cache_dir)
-        applywarp = subject_data.mem.cache(fsl.ApplyWarp)
+        subject_data, applywarp = _cache_interface(subject_data,
+                                                   fsl.ApplyWarp)
     else:
         applywarp = fsl.ApplyWarp().run
 
     if not fsl.ApplyWarp._cmd.startswith("fsl"):
         fsl.ApplyWarp._cmd = cmd_prefix + fsl.ApplyWarp._cmd
+
+    # Step 3:
 
     # Apply final transform
     func2structmat = subject_data.nipype_results['coreg'].outputs.out_matrix_file
@@ -628,7 +678,45 @@ def _do_subject_normalize(subject_data, caching, cmd_prefix,
 
 def _do_subject_smoothing(subject_data, fwhm, caching, cmd_prefix,
                           hardlink_output, report, **kwargs):
-    """
+    """FSL Smoothing functional MRI image.
+
+    Helper function to run fsl.Smooth to smooth functional image
+    of specified fwhm.
+
+    Parameters
+    ----------
+    subject_data : `SubjectData` instance
+        object that encapsulates the data for the subject (should have fields
+        like func - which is a functional MRI image)
+
+    fwhm : float
+        gaussian kernel fwhm, will be converted to sigma in mm (not voxels)
+
+    caching : bool
+        If caching needs to be done or not. If yes, results are stored
+        using NipypeMemory.
+
+    cmd_prefix : str
+        Command prefix for FSL command lines "fsl5.0-".
+
+    hardlink_output : bool
+        If True, then output files will be hard-linked from the respective
+        nipype cache directories, to the subject's immediate output directory
+        (subject_data.output_dir)
+
+    report : bool
+        If True, the alignment of anatomical image is overlayed on mean
+        functional image for visual inspection alongside with other runs
+        in html report.
+
+    Returns
+    -------
+    subject_data : `SubjectData` instance
+
+        - out_file : A smoothed functional image is generated and
+        saved in subject_data.output_dir if hardlink_output is True with name
+        at the end prefixed as xxxx_smooth.nii.gz
+
     """
     if not subject_data.func[0]:
         warnings.warn("subject_data.func=%s (empty); skippin smoothing "
@@ -637,11 +725,7 @@ def _do_subject_smoothing(subject_data, fwhm, caching, cmd_prefix,
 
     if caching:
         # prepare for smart-caching
-        cache_dir = os.path.join(subject_data.scratch, 'cache_dir')
-        if not os.path.exists(cache_dir):
-            os.makedirs(cache_dir)
-        subject_data.mem = NipypeMemory(base_dir=cache_dir)
-        smooth = subject_data.mem.cache(fsl.Smooth)
+        subject_data, smooth = _cache_interface(subject_data, fsl.Smooth)
     else:
         smooth = fsl.Smooth().run
 
@@ -655,9 +739,7 @@ def _do_subject_smoothing(subject_data, fwhm, caching, cmd_prefix,
     # failed node
     if smooth_results.outputs is None:
         subject_data.failed = True
-        _logger.error(_INTERFACE_ERROR_MSG.format(
-            smooth_results.interface, smooth_results.version,
-            smooth_results.inputs, smooth_results.runtime.traceback))
+        _error_if_node_is_failed(smooth_results)
         return subject_data
 
     subject_data.nipype_results['smooth'] = smooth_results
@@ -675,7 +757,72 @@ def _do_subject_smoothing(subject_data, fwhm, caching, cmd_prefix,
 
 def _do_subject_ica_aroma(subject_data, ica_aroma_denoise_type,
                           caching, hardlink_output, **kwargs):
-    """
+    """ Performs ICA-AROMA on smoothed functional image
+        (i.e. 'ICA-based Automatic Removal Of Motion Artifacts').
+
+        Please set do_coreg=True and do_normalize=True to run this
+        step. ICA Aroma requires functional to structural scan output
+        matrix file from do_coreg step and non-linear FNIRT warp file
+        from do_normalize step.
+
+        A data-driven method to identify and remove motion-related independent
+        components from fMRI data.
+
+        See link for further documentation:
+            https://github.com/maartenmennes/ICA-AROMA
+
+        Runs through nipype but ICA-AROMA package needs to be installed before
+        and this package is neither installed through nipype nor pypreprocess.
+
+        Steps to setup ICA-Aroma:
+
+        1. Download the latest package from
+           https://github.com/maartenmennes/ICA-AROMA/releases
+
+        2. Extract the .zip or .tar.gz file in a directory
+
+        3. source the path to directory in .bashrc
+           export PATH=/path/to/ICA-AROMA-0.4.4-beta:$PATH
+
+    Parameters
+    ----------
+    subject_data : `SubjectData` instance
+        object that encapsulates the data for the subject (should have fields
+        like func - which is a functional MRI image)
+
+    ica_aroma_denoise_type : ('nonaggr' or 'aggr' or 'both' or 'no',
+        nipype default value: nonaggr)
+        Type of denoising strategy:
+            -no: only classification, no denoising
+            -nonaggr (default): non-aggresssive denoising, i.e. partial
+            component regression
+            -aggr: aggressive denoising, i.e. full component regression
+            -both: both aggressive and non-aggressive denoising (two outputs)
+
+    caching : bool
+        If caching needs to be done or not. If yes, results are stored
+        using NipypeMemory.
+
+    hardlink_output : bool
+        If True, then output files will be hard-linked from the respective
+        nipype cache directories, to the subject's immediate output directory
+        (subject_data.output_dir)
+
+    Returns
+    -------
+    subject_data : `SubjectData` instance
+
+        - out_file : A ICA-Aroma denoised functional image is generated and
+        saved in subject_data.output_dir if hardlink_output is True with name
+        at the start prefixed as denoised_func_data_xxxx.nii.gz
+        xxxx depends on the denoising strategy chosen.
+
+    Notes
+    -----
+    ICA-AROMA: A robust ICA-based strategy for removing motion artifacts from
+    fMRI data.
+    Pruim RHR, Mennes M, van Rooij D, Llera A, Buitelaar JK, Beckmann CF.
+    Neuroimage 2015.
     """
     if not subject_data.func[0]:
         warnings.warn("subject_data.func=%s (empty); skipping ICA-AROMA "
@@ -684,11 +831,7 @@ def _do_subject_ica_aroma(subject_data, ica_aroma_denoise_type,
 
     if caching:
         # prepare for smart-caching
-        cache_dir = os.path.join(subject_data.scratch, 'cache_dir')
-        if not os.path.exists(cache_dir):
-            os.makedirs(cache_dir)
-        subject_data.mem = NipypeMemory(base_dir=cache_dir)
-        ica_aroma = subject_data.mem.cache(fsl.ICA_AROMA)
+        subject_data, ica_aroma = _cache_interface(subject_data, fsl.ICA_AROMA)
     else:
         ica_aroma = fsl.ICA_AROMA().run
 
