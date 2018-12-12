@@ -1100,7 +1100,7 @@ def do_subject_preproc(subject_data,
             fsl_motion_outliers_metric=fsl_motion_outliers_metric,
             cmd_prefix=cmd_prefix,
             hardlink_output=hardlink_output,
-            report=report, **kwargs)
+            **kwargs)
 
     #######################
     #  Motion correction
