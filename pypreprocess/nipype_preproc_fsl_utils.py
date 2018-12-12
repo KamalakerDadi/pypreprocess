@@ -1090,7 +1090,6 @@ def do_subject_preproc(subject_data,
         subject_data = _do_subject_bet(subject_data, caching=caching,
                                        cmd_prefix=cmd_prefix,
                                        hardlink_output=hardlink_output,
-                                       report=False,
                                        **kwargs.get('fraction', {}))
     #######################
     #  FSL Motion Outliers
