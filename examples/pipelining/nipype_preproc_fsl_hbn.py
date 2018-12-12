@@ -29,7 +29,8 @@ def _do_subject_preproc(anat, funcs, subject_id, output_dir):
             output_dir=join(output_dir, 'pypreprocess_output',
                             subject_id, unique_id),
             subject_id=subject_id, func=func, anat=anat)
-        subject_data = do_subject_preproc(subject_data, do_bet=True,
+        subject_data = do_subject_preproc(subject_data, remove_dummy_scans=True,
+                                          n_dummy_scans=5, do_bet=True,
                                           do_mc=True, do_coreg=True,
                                           do_normalize=True, do_ica_aroma=True,
                                           do_smooth=True, fwhm=5.)

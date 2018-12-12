@@ -864,24 +864,23 @@ def _do_subject_ica_aroma(subject_data, ica_aroma_denoise_type,
 
 
 def do_subject_preproc(subject_data,
+                       remove_dummy_scans=True,
+                       n_dummy_scans=0,
                        do_bet=True,
                        do_mc=True,
-                       do_fsl_motion_outliers=True,
-                       fsl_motion_outliers_metric='fdrms',
                        register_to_mean=True,
                        cost='mutualinfo',
+                       do_fsl_motion_outliers=True,
+                       fsl_motion_outliers_metric='fdrms',
                        do_coreg=True,
                        do_normalize=True,
                        do_smooth=True,
+                       fwhm=0.,
                        do_ica_aroma=False,
                        ica_aroma_denoise_type='nonaggr',
-                       fwhm=0.,
-                       remove_dummy_scans=True,
-                       n_dummy_scans=5,
                        cmd_prefix="fsl5.0-",
                        report=True,
                        parent_results_gallery=None,
-                       preproc_undergone="",
                        hardlink_output=True,
                        caching=True,
                        **kwargs
@@ -891,7 +890,147 @@ def do_subject_preproc(subject_data,
 
     Parameters
     ----------
+    subject_data : `SubjectData` instance
+        object that encapsulates the data for the subject (should have fields
+        like anat, func, output_dir, subject_id.
+        anat - a structural image T1
+        func - functional MRI image
+        output_dir - To save the outputs and cache. For our convenience,
+                     if there are more runs, then append each run with this
+                     output directory so each run is saved separately.
+        subject_id - Subject id
+        Refer to documentation of `SubjectData` class in pypreprocess/subject_data.py
 
+    remove_dummy_scans : bool, default=True
+        Skip dummy scans from functional MRI image. Switch to False if dummy
+        scans step doesn't need to be done.
+
+    n_dummy_scans : int, default=0
+        Number of dummy scans to remove.
+        Please read documentation of ExtractROI in FSL for full details.
+
+    do_bet : bool, default=True
+        Whether to do Brain extraction or not on structural scan.
+
+    do_mc : bool, default=True
+        Whether to do MCFLIRT motion correction or not on functional MRI image.
+
+    register_to_mean : bool, default=True
+        Whether register to mean volume used when `do_mc` is True.
+
+    cost : str, default='mutualinfo'
+        Cost function to optimize. Cost functions available are
+        ('mutualinfo', 'woods', 'corratio', 'normcorr', 'normmi', 'leastsquares')
+        Used when `do_mc` is True.
+
+    do_fsl_motion_outliers : bool, default=True
+        To detect timepoints in functional MRI image that have been induced
+        by large motion. See parameter `fsl_motion_outliers_metric` for metrics
+        available to choose to detect motion outliers.
+
+    fsl_motion_outliers_metric : str default='fdrms'
+        'refrms' - RMS intensity difference to reference volume as metric,
+        'refmse' - Mean Square Error version of refrms (used in original
+                   version of fsl_motion_outliers),
+        'dvars' - DVARS as metric,
+        'fd' - frame displacement,
+        'fdrms' - FD with RMS matrix calculation
+    Used when `do_fsl_motion_outliers` is True
+
+    do_coreg : bool, default=True
+        FLIRT based co-registration of functional MRI image to structural scan.
+
+    do_normalize : bool, default=True
+        FNIRT based non-linear registration of functional data
+        to FSL T1 template (via structural scan).
+
+        This helper function does the following steps:
+
+        1. Runs fsl.FLIRT to register structural scan to FSL T1 template.
+           Saves affine transformation matrix file. Outputs registered
+           structural scan.
+
+        2. Then, runs non-linear transformation on structural scan to save
+           non-linear warp file.
+
+        3. At last runs applywarp using pre-computed matrix file from step 1
+           and warp from step 2, on functional data using FSL T1 template
+           as the reference. Outputs functional data.
+
+    NOTE: Do not put `do_coreg` to False if you want to use normalize.
+
+    do_smooth : bool, default=True
+        Whether to smooth functional MRI image.
+
+    fwhm : float, default=0.
+        gaussian kernel fwhm, will be converted to sigma in mm (not voxels)
+
+    NOTE: A simple warning is raised if not modified from fwhm=0. to non-zero
+
+    do_ica_aroma : bool, default=False
+        This step takes fair amount of time. To do this step
+        `do_mc`, `do_coreg`, `do_normalize` needs to be done before to take
+        ouputs as inputs for ICA AROMA.
+
+        Performs ICA-AROMA on smoothed functional image
+        (i.e. 'ICA-based Automatic Removal Of Motion Artifacts').
+
+        Please set do_coreg=True and do_normalize=True to run this
+        step. ICA Aroma requires functional to structural scan output
+        matrix file from do_coreg step and non-linear FNIRT warp file
+        from do_normalize step.
+
+        A data-driven method to identify and remove motion-related independent
+        components from fMRI data.
+
+        See link for further documentation:
+            https://github.com/maartenmennes/ICA-AROMA
+
+        Runs through nipype but ICA-AROMA package needs to be installed before
+        and this package is neither installed through nipype nor pypreprocess.
+
+        Steps to setup ICA-Aroma:
+
+        1. Download the latest package from
+           https://github.com/maartenmennes/ICA-AROMA/releases
+
+        2. Extract the .zip or .tar.gz file in a directory
+
+        3. source the path to directory in .bashrc
+           export PATH=/path/to/ICA-AROMA-0.4.4-beta:$PATH
+
+    NOTE: Look for `ica_aroma_denoise_type` for denoising strategies.
+
+    ica_aroma_denoise_type : str, default='nonaggr'
+        Denoising strategies to use with ICA AROMA. Valid strategies
+        are ('nonaggr' or 'aggr' or 'both' or 'no')
+        Type of denoising strategy:
+            -no: only classification, no denoising
+            -nonaggr (default): non-aggresssive denoising, i.e. partial
+            component regression
+            -aggr: aggressive denoising, i.e. full component regression
+            -both: both aggressive and non-aggressive denoising (two outputs)
+
+    cmd_prefix : str
+        Command prefix for FSL command lines "fsl5.0-".
+
+    report : bool, default=True
+        If True, the alignment of anatomical image is overlayed on mean
+        functional image for visual inspection alongside with other runs
+        in html report.
+
+    parent_results_gallery default=None
+        reporting.base_reporter.ResultsGallery instance
+
+    hardlink_output : bool, default=True
+        If True, then output files will be hard-linked from the respective
+        nipype cache directories, to the subject's immediate output directory
+        (subject_data.output_dir)
+
+    caching : bool, default=True
+        Whether to cache the intermediary results or not. For faster
+        data processing. If same step is repeated, it loads directly
+        from cache.
     """
     # sanitze subject data
     if isinstance(subject_data, dict):
