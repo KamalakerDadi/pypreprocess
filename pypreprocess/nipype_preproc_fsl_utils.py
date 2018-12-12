@@ -435,7 +435,7 @@ def _do_subject_fsl_motion_outliers(subject_data, caching,
         return subject_data
 
     # collect output
-    subject_data.motion_outliers = motion_outliers_results.outputs.out_file
+    subject_data.motion_outliers = motion_outliers_results.outputs.out_metric_values
     subject_data.mo_plot = motion_outliers_results.outputs.out_metric_plot
     if isinstance(subject_data.motion_outliers, _basestring):
         assert subject_data.n_sessions == 1
