@@ -39,7 +39,8 @@ def _do_subject_preproc(anat, funcs, subject_id, output_dir):
 data_dir = '/neurospin/psy_sbox/hbn/RU/sourcedata/'
 subjects_paths = glob.glob(join(data_dir, 'sub-*'))
 
-output_base_dir = '/media/kr245263/4C9A6E0E9A6DF53C/hbn'
+# Set the base to the output directory
+output_base_dir = '.'
 
 anat_default_path = '{}_acq-HCP_T1w.nii.gz'
 

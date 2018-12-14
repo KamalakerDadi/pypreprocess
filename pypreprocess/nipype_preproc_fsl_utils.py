@@ -421,8 +421,8 @@ def _do_subject_fsl_motion_outliers(subject_data, caching,
     else:
         motion_outliers = utils.MotionOutliers().run
 
-    if not fsl.MCFLIRT._cmd.startswith("fsl"):
-        fsl.MCFLIRT._cmd = cmd_prefix + fsl.MCFLIRT._cmd
+    if not fsl.MotionOutliers._cmd.startswith("fsl"):
+        fsl.MotionOutliers._cmd = cmd_prefix + fsl.MotionOutliers._cmd
 
     motion_outliers_results = motion_outliers(**_update_interface_inputs(
         in_file=subject_data.func[0], metric=fsl_motion_outliers_metric,
@@ -871,7 +871,7 @@ def do_subject_preproc(subject_data,
                        register_to_mean=True,
                        cost='mutualinfo',
                        do_fsl_motion_outliers=True,
-                       fsl_motion_outliers_metric='fdrms',
+                       fsl_motion_outliers_metric='fd',
                        do_coreg=True,
                        do_normalize=True,
                        do_smooth=True,
